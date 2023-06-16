@@ -6,7 +6,7 @@ let package = Package(
     name: "LogExport",
     defaultLocalization: "en",
     platforms: [
-        .iOS(.v14),
+        .iOS(.v16),
         .macOS(.v13)
     ],
     products: [

@@ -1,33 +1,16 @@
 import SwiftUI
 import OSLog
 
-extension TimeInterval: Identifiable {
-    public var id: Int {
-        return Int(self)
-    }
-    
-    internal static var day: TimeInterval {
-        return TimeInterval(24*60*60)
-    }
-    
-    internal static var hour: TimeInterval {
-        return TimeInterval(60*60)
-    }
-    
-    internal static var tenMinutes: TimeInterval {
-        return TimeInterval(10*60)
-    }
-}
-
 public struct LogExportSheet: View {
     @Environment(\.dismiss) var dismiss
     
     @State var includeSystemLogs: Bool = false
     @State var interval: TimeInterval = .tenMinutes
     
-    @State private var exporting: Bool = false
+    @State private var isProgress: Bool = false
     @State private var error: LogExportError? = nil
     
+    @State private var presentLogFileDocumentExport = false
     @State private var logFileDocument: LogFileDocument? = nil
     
     private let intervals: [TimeInterval] = [.day, .hour, .tenMinutes]
@@ -54,12 +37,20 @@ public struct LogExportSheet: View {
             } header: {
                 Text("Filter")
             }
+            
+            #if os(iOS)
+            Section {
+                self.buttonExportToClipboard
+                self.buttonExportToFile
+            }
+            #endif
         }
+        .navigationTitle("Export logs")
         .interactiveDismissDisabled()
-        .opacity(self.exporting ? 0.6 : 1)
-        .disabled(self.exporting)
+        .opacity(self.isProgress ? 0.6 : 1)
+        .disabled(self.isProgress)
         .overlay {
-            if self.exporting {
+            if self.isProgress {
                 ProgressView()
             }
         }
@@ -77,18 +68,10 @@ public struct LogExportSheet: View {
             actions: {}
         )
         .fileExporter(
-            isPresented: Binding<Bool>(
-                get: {
-                    self.logFileDocument != nil
-                }, set: { value in
-                    if !value {
-                        self.logFileDocument = nil
-                    }
-                }
-            ),
+            isPresented: self.$presentLogFileDocumentExport,
             document: self.logFileDocument,
             contentType: LogFileDocument.readableContentTypes.first!,
-            defaultFilename: "\(ProcessInfo.processInfo.processName)-\(Date().ISO8601Format()).log"
+            defaultFilename: "\(ProcessInfo.processInfo.processName)-\(Date().timeIntervalSince1970).log"
         ) { result in
             switch result {
             case .failure(let error):
@@ -107,68 +90,100 @@ public struct LogExportSheet: View {
                 }
             }
             
-            ToolbarItemGroup(placement: .confirmationAction) {
-                Button {
-                    let (includeSystemLogs, since) = self.onStartExport()
-                    Task.detached(priority: .userInitiated) {
-                        do {
-                            try await self.exportToPasteboard(
-                                since: since,
-                                includeSystemLogs: includeSystemLogs
-                            )
-                            await self.onStopExport()
-                        } catch {
-                            await self.onStopExport(error: error)
-                        }
-                    }
-                } label: {
-                    Text("Copy to clipboard")
+            #if os(macOS)
+            ToolbarItemGroup {
+                self.buttonExportToClipboard
+                self.buttonExportToFile
+            }
+            #endif
+        }
+#if os(macOS)
+        .frame(height: 200)
+        .formStyle(.grouped)
+#endif
+    }
+    
+    @ViewBuilder
+    public var buttonExportToClipboard: some View {
+        Button {
+            Task.detached(priority: .userInitiated) {
+                let (includeSystemLogs, since) = await self.onStartExport()
+                do {
+                    try await self.exportToPasteboard(
+                        since: since,
+                        includeSystemLogs: includeSystemLogs
+                    )
+                    await self.onStopExport()
+                } catch {
+                    await self.onStopExport(error: error)
                 }
+            }
+        } label: {
+            Label("Copy to clipboard", systemImage: "arrow.up.doc.on.clipboard")
+        }
+        .disabled(self.isProgress)
+    }
+    
+    @ViewBuilder
+    public var buttonExportToFile: some View {
+        Button {
+            guard self.logFileDocument == nil else {
+                self.presentLogFileDocumentExport.toggle()
+                return
             }
             
-            ToolbarItemGroup(placement: .confirmationAction) {
-                Button {
-                    let (includeSystemLogs, since) = self.onStartExport()
-                    Task.detached(priority: .userInitiated) {
-                        do {
-                            let file = try await self.exportToFile(
-                                since: since,
-                                includeSystemLogs: includeSystemLogs
-                            )
-                            self.logFileDocument = LogFileDocument(file: file)
-                        } catch {
-                            await self.onStopExport(error: error)
-                        }
+            Task.detached(priority: .userInitiated) {
+                let (includeSystemLogs, since) = await self.onStartExport()
+                do {
+                    let file = try await self.exportToFile(
+                        since: since,
+                        includeSystemLogs: includeSystemLogs
+                    )
+                    await MainActor.run {
+                        self.logFileDocument = LogFileDocument(file: file)
+                        self.presentLogFileDocumentExport.toggle()
                     }
-                } label: {
-                    Text("Export to file")
+                    await self.setInProgress(false)
+                } catch {
+                    await self.onStopExport(error: error)
                 }
             }
+        } label: {
+            Label("Export to file...", systemImage: "arrow.up.doc")
         }
-        .padding()
+        .disabled(self.isProgress)
     }
     
     @MainActor
     private func onStartExport() -> (Bool, Date) {
-        self.exporting = true
+        self.isProgress = true
         return (self.includeSystemLogs, Date().advanced(by: -self.interval))
     }
     
     @MainActor
     private func onStopExport(error: Error? = nil) {
+        self.isProgress = false
         if let error {
             if let logExportError = error as? LogExportError {
                 self.error = logExportError
             } else {
-                self.error = LogExportError(error.localizedDescription)
+                if let localizedError = error as? LocalizedError {
+                    self.error = LogExportError(localizedError.errorDescription ?? localizedError.localizedDescription)
+                } else {
+                    self.error = LogExportError(error.localizedDescription)
+                }
             }
+        } else {
+            if let file = self.logFileDocument?.file {
+                try? FileManager.default.removeItem(at: file)
+            }
+            self.dismiss()
         }
-        self.exporting = false
     }
     
     private func exportToPasteboard(since: Date? = nil, includeSystemLogs: Bool) async throws {
         try await Task.detached {
-            let result = try await self.exportToFile(since: since, includeSystemLogs: false)
+            let result = try await self.exportToFile(since: since, includeSystemLogs: includeSystemLogs)
             
             defer {
                 try? FileManager.default.removeItem(at: result)
@@ -186,7 +201,7 @@ public struct LogExportSheet: View {
     }
     
     private func exportToFile(since: Date?, includeSystemLogs: Bool) async throws -> URL {
-        let url = URL.temporaryDirectory.appending(path: "\(ProcessInfo.processInfo.processName)-\(UUID().uuidString).log", directoryHint: .notDirectory)
+        let url = URL.temporaryDirectory.appending(path: "\(ProcessInfo.processInfo.processName)-\(Date().timeIntervalSince1970).log", directoryHint: .notDirectory)
        
         try await Task.detached {
             if FileManager.default.createFile(atPath: url.path(percentEncoded: false), contents: nil) {
@@ -200,15 +215,15 @@ public struct LogExportSheet: View {
                 
                 var predicate: NSPredicate? = nil
                 if
-                    includeSystemLogs,
+                    !includeSystemLogs,
                     let bundleIdentifier = Bundle.main.bundleIdentifier
                 {
-                    predicate = NSPredicate(format: "subsytem BEGINSWITH %@", bundleIdentifier)
+                    predicate = NSPredicate(format: "subsystem BEGINSWITH %@", bundleIdentifier)
                 }
                     
                 for entry in try logStore.getEntries(at: osLogPosition, matching: predicate) {
                     if let log = entry as? OSLogEntryLog {
-                        if let data = "\(entry.date.ISO8601Format(.iso8601)) - [\(log.level.string)] - \(log.subsystem) - \(log.category) - \(log.composedMessage)\n".data(using: .utf8) {
+                        if let data = "\(entry.date.ISO8601Format()) - [\(log.level.string)] - \(log.subsystem) - \(log.category) - \(log.composedMessage)\n".data(using: .utf8) {
                             fileHandle.write(data)
                         }
                     }
@@ -224,10 +239,19 @@ public struct LogExportSheet: View {
     }
     
     @MainActor
+    private func setInProgress(_ value: Bool) {
+        self.isProgress = value
+    }
+    
+    @MainActor
     private func setToPasteBoard(_ string: String) {
+        #if os(macOS)
         let pasteboard = NSPasteboard.general
         pasteboard.declareTypes([.string], owner: nil)
         pasteboard.setString(string, forType: .string)
+        #elseif os(iOS)
+        UIPasteboard.general.string = string
+        #endif
     }
 }
 

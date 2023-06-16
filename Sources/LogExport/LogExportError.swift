@@ -8,6 +8,10 @@ public final class LogExportError: LocalizedError {
     }
     
     var localizedDescription: String {
-        return errorStr
+        return self.errorStr
+    }
+    
+    public var errorDescription: String? {
+        return self.errorStr
     }
 }

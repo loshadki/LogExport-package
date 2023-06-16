@@ -4,7 +4,17 @@ public struct LogExportButton: View {
     @State private var exportLogs = false
     @State private var exportLogFileDocument: LogFileDocument? = nil
     
-    public var label: Label = Label("Export logs...", systemImage: "square.and.arrow.up")
+    public init() {
+        self.label = Label("Export logs...", systemImage: "square.and.arrow.up")
+    }
+    
+    public init(
+        label: Label<Text, Image>
+    ) {
+        self.label = label
+    }
+    
+    public var label: Label<Text, Image>
     
     public var body: some View {
         Button {
@@ -20,11 +30,11 @@ public struct LogExportButton: View {
                 self.exportLogs = false
             }
         ) {
-            LogExportSheet()
+            NavigationStack {
+                LogExportSheet()
+            }
         }
     }
-    
-    
 }
 
 struct ExportLogsButtonView_Previews: PreviewProvider {

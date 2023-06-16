@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 internal final class LogFileDocument: FileDocument {
     static var readableContentTypes: [UTType] = [UTType.log]
 
-    private let file: URL
+    public let file: URL
     
     init(file: URL) {
         self.file = file
