@@ -38,7 +38,7 @@ public struct LogExportSheet: View {
                 Text("Filter")
             }
             
-            #if os(iOS)
+            #if os(iOS) || os(visionOS)
             Section {
                 self.buttonExportToClipboard
                 self.buttonExportToFile
@@ -249,7 +249,7 @@ public struct LogExportSheet: View {
         let pasteboard = NSPasteboard.general
         pasteboard.declareTypes([.string], owner: nil)
         pasteboard.setString(string, forType: .string)
-        #elseif os(iOS)
+        #elseif os(iOS) || os(visionOS)
         UIPasteboard.general.string = string
         #endif
     }
